@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Keep pushing on</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: #fcfcfc;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+                 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #34312d;
+    -webkit-font-smoothing: antialiased;
+    transition: background 0.7s ease, color 0.7s ease;
+  }
+  #stage {
+    position: fixed; inset: 0; z-index: 0; overflow: hidden;
+    /* An empty white studio floor receding toward a high horizon: the near floor
+       (bottom) reads brightest and the far floor (top) falls off slightly, giving
+       depth with no walls or ceiling. The cast shadow is a separate element below,
+       laid onto that floor plane in perspective. */
+    background: radial-gradient(ellipse 150% 115% at 50% 132%, #fdfdfd 0%, #f4f3f1 66%, #ececea 100%);
+    transition: background 0.8s ease;
+  }
+  /* The model renders above the disco layer so the lights are never in front of
+     the record player; its canvas is transparent so the backdrop shows through. */
+  #gl { position: fixed; inset: 0; z-index: 2; }
+  body.dark { background: #07090e; color: #f4efe7; }
+  body.dark #stage {
+    background: radial-gradient(ellipse 72% 62% at 50% 45%, #191d2a 0%, #0b0d14 56%, #05060a 100%);
+  }
+  body.dark #headline { color: #f1ece4; text-shadow: 0 2px 28px rgba(0,0,0,0.55); }
+
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  canvas.overModel { cursor: pointer; }
+  canvas.overKnob { cursor: ns-resize; }
+
+  #headline {
+    position: fixed; left: 0; right: 0; width: 100%; z-index: 6;
+    transform: translateY(-80px);
+    box-sizing: border-box;
+    text-align: center; pointer-events: none;
+    /* fluid scaling: 32px at a ~375px phone up to 96px at 1440px+ desktops */
+    font-size: clamp(32px, 6vw + 9px, 96px);
+    top: clamp(144px, 8vw + 120px, 240px);
+    padding: 0 clamp(20px, 5vw, 32px);
+    line-height: 1.08;
+    font-weight: 600; letter-spacing: -0.02em;
+    color: #2f2c28;
+    overflow-wrap: break-word; word-break: normal; white-space: normal;
+  }
+  #boogiePrompt {
+    position: fixed; z-index: 6; left: 20px; right: 20px; opacity: 0;
+    /* Stationary, viewport-scaled placement below the model; the min() keeps it
+       clear of the bottom controls on short screens. */
+    top: min(calc(50% + 22vh), calc(100% - 180px));
+    text-align: center; pointer-events: none; color: rgba(43,40,36,0.82);
+    font-size: clamp(13px, 1.15vw, 16px); letter-spacing: 0.01em;
+    transition: opacity 0.45s ease;
+  }
+  #boogiePrompt.show { opacity: 1; }
+  /* Shadow keeps the light text legible where the dark-mode disco overlay
+     projects bright colored spots directly behind it. */
+  body.dark #boogiePrompt { color: rgba(241,236,228,0.82); text-shadow: 0 1px 12px rgba(0,0,0,0.6); }
+  /* short / landscape phones: keep the headline from crowding the model */
+  @media (max-height: 480px) {
+    #headline { font-size: clamp(22px, 5vh, 34px); top: clamp(16px, 6vh, 32px); }
+  }
+
+  #loader {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    background: #fcfcfc; transition: opacity 0.6s ease;
+  }
+  #loader.done { opacity: 0; pointer-events: none; }
+  .ring {
+    width: 38px; height: 38px; border-radius: 50%;
+    border: 2px solid #e4e0d9; border-top-color: #8f8a82;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #err {
+    position: fixed; inset: 0; z-index: 20; display: none;
+    align-items: center; justify-content: center; padding: 40px;
+    background: #f8f8f6; text-align: center; font-size: 0.9rem; color: #8a4a4a;
+  }
+  #sc { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px;
+        opacity: 0; border: 0; pointer-events: none; }
+  #dock {
+    position: fixed; z-index: 7; left: 50%; bottom: max(40px, calc(env(safe-area-inset-bottom) + 20px));
+    transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+    max-width: calc(100vw - 24px);
+  }
+  #controls {
+    display: flex; align-items: center; gap: 8px; padding: 7px; min-width: 0;
+    border: 1px solid rgba(47,44,40,0.13); border-radius: 999px;
+    background: rgba(248,248,246,0.72); box-shadow: 0 10px 35px rgba(39,35,30,0.12);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    transition: background 0.5s ease, border-color 0.5s ease;
+  }
+  /* Play / pause icon swap. */
+  #playBtn .ic-pause { display: none; }
+  #playBtn.playing .ic-play { display: none; }
+  #playBtn.playing .ic-pause { display: inline; }
+  #playBtn .ic-play { fill: currentColor; }
+  /* Airhorn lives in its own glass circle beside the panel, revealed on play. */
+  #hornBtn {
+    flex: 0 0 auto; width: 62px; height: 62px;
+    border: 1px solid rgba(47,44,40,0.13);
+    background: rgba(248,248,246,0.72); box-shadow: 0 10px 35px rgba(39,35,30,0.12);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    opacity: 0; visibility: hidden; transform: scale(0.6);
+    transition: opacity 0.4s ease, transform 0.4s cubic-bezier(.22,.8,.28,1),
+                visibility 0.4s ease, background 0.5s ease, border-color 0.5s ease;
+  }
+  #hornBtn.show { opacity: 1; visibility: visible; transform: scale(1); }
+  #hornBtn:hover { background: rgba(238,238,234,0.82); }
+  #hornBtn:active { transform: scale(0.9); }
+  body.dark #hornBtn {
+    background: rgba(12,14,21,0.7); border-color: rgba(255,255,255,0.18);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+  }
+  body.dark #hornBtn:hover { background: rgba(24,28,38,0.8); }
+  #timeline {
+    width: 0; min-width: 0; display: flex; align-items: center; gap: 10px;
+    padding: 0; overflow: hidden; color: #4a4641;
+    opacity: 0; visibility: hidden; transform: translateX(8px);
+    transition: width 0.55s cubic-bezier(.22,.8,.28,1), opacity 0.35s ease, transform 0.55s ease, visibility 0.55s ease;
+  }
+  #timeline.show { width: min(410px, calc(100vw - 260px)); opacity: 1; visibility: visible; transform: translateX(0); padding-left: 8px; }
+  #timeline time { width: 35px; flex: 0 0 35px; font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+  #timeline time:last-child { text-align: right; }
+  #scrubber { width: 100%; height: 18px; appearance: none; background: transparent; cursor: ew-resize; }
+  #scrubber::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(90deg, rgba(47,44,40,0.88) var(--progress,0%), rgba(47,44,40,0.22) var(--progress,0%)); }
+  #scrubber::-webkit-slider-thumb { appearance: none; width: 13px; height: 13px; margin-top: -4.5px; border: 2px solid rgba(47,44,40,0.88); border-radius: 50%; background: #fcfcfc; }
+  #scrubber::-moz-range-track { height: 4px; border-radius: 4px; background: rgba(47,44,40,0.22); }
+  #scrubber::-moz-range-progress { height: 4px; border-radius: 4px; background: rgba(47,44,40,0.88); }
+  #scrubber::-moz-range-thumb { width: 10px; height: 10px; border: 2px solid rgba(47,44,40,0.88); border-radius: 50%; background: #fcfcfc; }
+  #scrubber:focus-visible { outline: 2px solid currentColor; outline-offset: 5px; border-radius: 4px; }
+  body.dark #timeline { color: #eee8df; }
+  body.dark #scrubber::-webkit-slider-runnable-track { background: linear-gradient(90deg, rgba(232,226,216,0.90) var(--progress,0%), rgba(255,255,255,0.18) var(--progress,0%)); }
+  body.dark #scrubber::-webkit-slider-thumb { border-color: rgba(232,226,216,0.90); }
+  body.dark #scrubber::-moz-range-track { background: rgba(255,255,255,0.18); }
+  body.dark #scrubber::-moz-range-progress { background: rgba(232,226,216,0.90); }
+  body.dark #scrubber::-moz-range-thumb { border-color: rgba(232,226,216,0.90); background: #11141c; }
+  .control {
+    width: 46px; height: 46px; display: grid; place-items: center; border: 0; border-radius: 50%;
+    color: #34312d; background: transparent; cursor: pointer; transition: color 0.25s ease, background 0.25s ease, transform 0.18s ease;
+  }
+  .control:hover { background: rgba(47,44,40,0.08); }
+  .control:active { transform: scale(0.9); }
+  .control:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .control svg { width: 25px; height: 25px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .control[aria-disabled="true"] { opacity: 0.32; cursor: not-allowed; }
+  .control[aria-disabled="true"]:hover { background: transparent; }
+  body.dark #controls { color: #f5f0e8; background: rgba(12,14,21,0.7); border-color: rgba(255,255,255,0.18); box-shadow: 0 12px 40px rgba(0,0,0,0.4); }
+  body.dark .control { color: #f5f0e8; }
+  body.dark .control[aria-pressed="true"] { color: #82e9ff; background: rgba(93,210,255,0.13); }
+  #hornBtn.blast { animation: horn-pop 0.42s ease; color: #d7331e; }
+  #toast {
+    position: fixed; z-index: 12; left: 50%; bottom: max(166px, calc(env(safe-area-inset-bottom) + 166px));
+    padding: 10px 15px; border-radius: 999px; color: #f8f5ef; background: rgba(28,26,23,0.9);
+    font-size: 0.78rem; box-shadow: 0 8px 28px rgba(0,0,0,0.2); pointer-events: none;
+    opacity: 0; transform: translate(-50%, 8px); transition: opacity 0.22s ease, transform 0.22s ease;
+    white-space: nowrap;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  @keyframes horn-pop { 35% { transform: rotate(-10deg) scale(1.18); } 70% { transform: rotate(7deg) scale(1.08); } }
+  @media (prefers-reduced-motion: reduce) {
+    #hornBtn.blast { animation: none; }
+  }
+
+  /* Dark-mode disco reflections: soft projected light spots, no visible ball.
+     Sits ABOVE the model (but below the headline and controls) so the spots
+     screen-blend across the record player as real thrown light sweeping over it,
+     bending over its silhouette rather than being hidden behind it. */
+  #disco {
+    position: fixed; inset: 0; z-index: 3;
+    pointer-events: none;
+    opacity: 0; transition: opacity 1s ease;
+    mix-blend-mode: screen;
+  }
+  body.dark #disco { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+<canvas id="disco" aria-hidden="true"></canvas>
+<canvas id="gl"></canvas>
+
+<h1 id="headline">Here’s to what’s next.<br>Keep pushing on.</h1>
+<p id="boogiePrompt">Tap or click the record to boogie.</p>
+
+<div id="dock">
+  <nav id="controls" aria-label="Playback">
+    <button class="control" id="playBtn" type="button" aria-label="Play music" title="Play / pause">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path class="ic-play" d="M11 8l14 8-14 8V8Z"/>
+        <path class="ic-pause" d="M12 8v16M20 8v16"/>
+      </svg>
+    </button>
+    <div id="timeline" aria-label="Song timeline">
+      <time id="elapsed" datetime="PT0S">0:00</time>
+      <input id="scrubber" type="range" min="0" max="1000" value="0" step="1" aria-label="Scrub through song">
+      <time id="duration" datetime="PT0S">0:00</time>
+    </div>
+    <button class="control" id="lightBtn" type="button" aria-label="Turn on dark mode" aria-pressed="false" aria-disabled="true" title="Dark mode">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="11"/>
+        <path d="M6.2 10.5h19.6M5 16h22M6.2 21.5h19.6"/>
+        <path d="M10.5 6.4v19.2M16 5v22M21.5 6.4v19.2"/>
+      </svg>
+    </button>
+  </nav>
+  <button class="control" id="hornBtn" type="button" aria-label="Play airhorn" aria-disabled="true" title="Airhorn">
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M5 13v6h5l12 6V7l-12 6H5Z"/><path d="M7 19v6h7v-4M22 12h3M22 20h3M24 16h4"/>
+    </svg>
+  </button>
+</div>
+<audio id="airhorn" src="dj-airhorn-sound-39405.mp3" preload="auto"></audio>
+<div id="toast" role="status" aria-live="polite">Play the music to enable</div>
+
+<div id="loader"><div class="ring"></div></div>
+<div id="err"></div>
+
+<script>
+/* Dark-mode disco-ball reflections — no ball is drawn. Many soft white/silver
+   glows drift on slow curved paths with screen blending, only while dark mode
+   is on. Honors prefers-reduced-motion (static frame) and thins out on small
+   screens. Fully independent of the WebGL module below. */
+(function () {
+  const cv = document.getElementById('disco');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  const rand = (a, b) => a + Math.random() * (b - a);
+  let W = 0, H = 0, spots = [], running = false, raf = 0, t0 = 0;
+
+  // The looping track is Oliver $ & Jimi Jules — "Keep On" (~124 BPM house).
+  // Spots drift/pulse at an eighth of that tempo, so one full cycle spans eight
+  // beats. BEAT_W is the resulting angular speed (radians/sec).
+  const BPM = 124;
+  const BEAT_W = 2 * Math.PI * (BPM / 8) / 60;
+
+  // Each orb stays lit for LIFE seconds, then fades out over FADE seconds before
+  // a fresh one takes its place.
+  const LIFE = 4;
+  const FADE = 1.1;
+
+  // Vivid disco palette — mirror-ball gels throwing colored light. Weighted so
+  // green, blue and yellow dominate; pinks/magentas are only an occasional accent.
+  const PALETTE = [
+    [80, 230, 120],  // green
+    [80, 230, 120],  // green
+    [80, 230, 120],  // green
+    [60, 190, 255],  // cyan
+    [90, 120, 255],  // blue
+    [90, 120, 255],  // blue
+    [90, 120, 255],  // blue
+    [255, 235, 60],  // yellow
+    [255, 235, 60],  // yellow
+    [255, 235, 60],  // yellow
+    [255, 150, 40],  // amber
+    [255, 70, 90],   // red (rare accent)
+    [200, 90, 255],  // violet (rare accent)
+  ];
+
+  // Orbs live on a perspective floor whose vanishing point sits above the top
+  // of the screen. bu/bv are floor-space coords: bu is lateral (-1..1, centre=0),
+  // bv is inverse-depth (0=far/near-VP, 1=closest/bottom). du/dv are orbit
+  // extents in the same space. rb is the base radius at full depth (bv=1).
+  function makeSpot(rbMin, rbMax, vMin, vMax) {
+    return {
+      bu: rand(-0.92, 0.92),
+      bv: rand(vMin, vMax),
+      rb: rand(rbMin, rbMax),
+      du: rand(0.06, 0.26),
+      dv: rand(0.03, 0.13),
+      w: BEAT_W * (Math.random() < 0.5 ? -1 : 1),
+      ph: rand(0, Math.PI * 2),
+      amp: rand(0.09, 0.30),
+      pulse: BEAT_W, pph: rand(0, Math.PI * 2),
+      col: PALETTE[(Math.random() * PALETTE.length) | 0],
+      // Lifecycle: each orb holds for LIFE seconds then fades; off staggers them
+      // and gen tracks which cycle we're in so a fresh orb spawns on each repeat.
+      off: rand(0, LIFE + FADE),
+      gen: -1,
+    };
+  }
+
+  // Reseed an orb's position, drift and colour so every 4-second cycle reads as
+  // a brand-new light rather than the same one blinking in place.
+  function respawn(s) {
+    s.bu = rand(-0.92, 0.92);
+    s.du = rand(0.06, 0.26);
+    s.dv = rand(0.03, 0.13);
+    s.w = BEAT_W * (Math.random() < 0.5 ? -1 : 1);
+    s.ph = rand(0, Math.PI * 2);
+    s.amp = rand(0.09, 0.30);
+    s.col = PALETTE[(Math.random() * PALETTE.length) | 0];
+  }
+
+  function build() {
+    const mobile = Math.min(innerWidth, innerHeight) < 640;
+    const n = mobile ? 10 : 22;
+    spots = [];
+    // Small orbs across the whole floor depth.
+    for (let i = 0; i < n; i++)
+      spots.push(makeSpot(mobile ? 100 : 163, mobile ? 300 : 475, 0.15, 0.95));
+    // Large wash orbs — kept nearer (larger bv) so they stay big on screen.
+    for (let i = 0; i < 5; i++)
+      spots.push(makeSpot(mobile ? 325 : 525, mobile ? 500 : 775, 0.55, 1.0));
+  }
+
+  function resize() {
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function draw(time) {
+    const t = (time - t0) / 1000;
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'screen';
+
+    // Vanishing point sits above the screen. VP_Y is negative (off-canvas top).
+    // NEAR_Y is the floor's closest edge, just below the canvas bottom.
+    // fv = 0 → at the VP (infinitely far); fv = 1 → at NEAR_Y (closest).
+    // y_screen = VP_Y + (NEAR_Y - VP_Y) * fv  — linear in fv = 1/Z, so
+    // this is a proper perspective mapping (equal Δfv = equal Δy on screen).
+    const VP_Y  = -H * 0.42;
+    const NEAR_Y = H * 1.08;
+    const SPAN   = NEAR_Y - VP_Y;
+    for (const s of spots) {
+      const fu = s.bu + s.du * Math.cos(t * s.w + s.ph);
+      const fv = s.bv + s.dv * Math.sin(t * s.w + s.ph);
+      if (fv <= 0.01) continue;
+
+      const y = VP_Y + SPAN * fv;
+      const x = W / 2 + fu * (W / 2);  // full screen width; only radius reflects depth
+      const r = s.rb * fv;
+
+      // Lifecycle envelope: quick fade-in, ~4s hold, then fade out over FADE.
+      // A new generation reseeds the orb so each 4s window is a different light.
+      const CYCLE = LIFE + FADE;
+      const age = ((t + s.off) % CYCLE + CYCLE) % CYCLE;
+      const gen = Math.floor((t + s.off) / CYCLE);
+      if (gen !== s.gen) { s.gen = gen; if (t > 0) respawn(s); }
+      const FIN = 0.4;
+      const env = age < FIN ? age / FIN
+                : age < LIFE ? 1
+                : Math.max(0, 1 - (age - LIFE) / FADE);
+
+      const a = s.amp * env;
+      if (a <= 0.002 || r < 2) continue;
+
+      // A plain soft round glow — no distortion, no flicker.
+      const [rc, gc, bc] = s.col;
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0,   `rgba(${rc},${gc},${bc},${a})`);
+      grad.addColorStop(0.5, `rgba(${rc},${gc},${bc},${a * 0.35})`);
+      grad.addColorStop(1,   `rgba(${rc},${gc},${bc},0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function loop(time) { if (!running) return; draw(time); raf = requestAnimationFrame(loop); }
+
+  function start() {
+    if (running) return;
+    t0 = performance.now();
+    if (reduce.matches) { draw(t0); return; }  // one static frame, no animation
+    running = true;
+    raf = requestAnimationFrame(loop);
+  }
+  function stop() { running = false; cancelAnimationFrame(raf); ctx.clearRect(0, 0, W, H); }
+  // Lights animate only while the music plays. In dark mode when paused they
+  // remain visible but frozen (a single static frame); in light mode they clear.
+  const isDark = () => document.body.classList.contains('dark');
+  const isPlaying = () => document.body.classList.contains('playing');
+  const sync = () => {
+    if (isDark() && isPlaying()) start();
+    else { stop(); if (isDark()) draw(performance.now()); }
+  };
+
+  addEventListener('resize', () => {
+    resize(); build();
+    if (!running && isDark()) draw(performance.now());
+  });
+  reduce.addEventListener && reduce.addEventListener('change', () => { stop(); sync(); });
+  new MutationObserver(sync).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+  resize(); build(); sync();
+})();
+</script>
+
+<iframe id="sc" allow="autoplay" scrolling="no" frameborder="no" title="SoundCloud player"
+  src="https://w.soundcloud.com/player/?url=https%3A%2F%2Fsoundcloud.com%2Foliverdollar%2Foliver-jimi-jules_keep-on&auto_play=false&hide_related=true&show_comments=false&show_user=true&visual=false"></iframe>
+<script src="https://w.soundcloud.com/player/api.js"></script>
+
+<script type="module">
+const MODEL_URL = "/model.glb";
+
+/* ---------- mat4 ---------- */
+const M4 = {
+  ident: () => new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]),
+  persp(fovy, a, n, f) {
+    const t = 1 / Math.tan(fovy / 2), o = new Float32Array(16);
+    o[0] = t / a; o[5] = t; o[11] = -1;
+    o[10] = (f + n) / (n - f); o[14] = (2 * f * n) / (n - f);
+    return o;
+  },
+  look(eye, c, up) {
+    let z = [eye[0]-c[0], eye[1]-c[1], eye[2]-c[2]];
+    let l = Math.hypot(...z); z = z.map(v => v / l);
+    let x = [up[1]*z[2]-up[2]*z[1], up[2]*z[0]-up[0]*z[2], up[0]*z[1]-up[1]*z[0]];
+    l = Math.hypot(...x) || 1; x = x.map(v => v / l);
+    const y = [z[1]*x[2]-z[2]*x[1], z[2]*x[0]-z[0]*x[2], z[0]*x[1]-z[1]*x[0]];
+    return new Float32Array([
+      x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
+      -(x[0]*eye[0]+x[1]*eye[1]+x[2]*eye[2]),
+      -(y[0]*eye[0]+y[1]*eye[1]+y[2]*eye[2]),
+      -(z[0]*eye[0]+z[1]*eye[1]+z[2]*eye[2]), 1]);
+  },
+  mul(a, b) {
+    const o = new Float32Array(16);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+      let s = 0;
+      for (let k = 0; k < 4; k++) s += a[k * 4 + j] * b[i * 4 + k];
+      o[i * 4 + j] = s;
+    }
+    return o;
+  },
+  xform(m, v) {
+    const o = [0,0,0,0];
+    for (let r = 0; r < 4; r++) {
+      let s = 0;
+      for (let c = 0; c < 4; c++) s += m[c*4+r] * v[c];
+      o[r] = s;
+    }
+    return o;
+  },
+  trans(t) { const o = M4.ident(); o[12]=t[0]; o[13]=t[1]; o[14]=t[2]; return o; },
+  // Rotate by th (radians) about a vertical axis passing through world (cx, *, cz).
+  rotYAbout(cx, cz, th) {
+    const c = Math.cos(th), s = Math.sin(th), o = M4.ident();
+    o[0] = c; o[2] = -s; o[8] = s; o[10] = c;
+    o[12] = cx - (c * cx + s * cz);
+    o[14] = cz - (-s * cx + c * cz);
+    return o;
+  },
+  transRotY(t, th) {
+    const c = Math.cos(th), s = Math.sin(th), o = M4.ident();
+    o[0] = c; o[2] = -s; o[8] = s; o[10] = c;
+    o[12] = t[0]; o[13] = t[1]; o[14] = t[2];
+    return o;
+  },
+  ortho(l, r, b, t, n, f) {
+    const o = new Float32Array(16);
+    o[0]=2/(r-l); o[5]=2/(t-b); o[10]=-2/(f-n);
+    o[12]=-(r+l)/(r-l); o[13]=-(t+b)/(t-b); o[14]=-(f+n)/(f-n); o[15]=1;
+    return o;
+  },
+  // Project all vertices straight down onto world y = gy (contact shadow).
+  shadowFloor(gy) {
+    // lx = lz = 0: vertical projection, shadow directly below each point.
+    return new Float32Array([
+      1, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 1, 0,
+      0, gy, 0, 1
+    ]);
+  }
+};
+
+/* ---------- GLB ---------- */
+function b64ToBuf(b64) {
+  const bin = atob(b64), n = bin.length, u = new Uint8Array(n);
+  for (let i = 0; i < n; i++) u[i] = bin.charCodeAt(i);
+  return u.buffer;
+}
+function parseGLB(buf) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x46546C67) throw new Error("not a GLB");
+  let off = 12, json = null, bin = null;
+  while (off < dv.byteLength) {
+    const len = dv.getUint32(off, true), type = dv.getUint32(off + 4, true);
+    const data = new Uint8Array(buf, off + 8, len);
+    if (type === 0x4E4F534A) json = JSON.parse(new TextDecoder().decode(data));
+    else if (type === 0x004E4942) bin = data;
+    off += 8 + len;
+  }
+  return { json, bin };
+}
+const CT = { 5126: Float32Array, 5125: Uint32Array, 5123: Uint16Array };
+const NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
+function readAcc(g, bin, i) {
+  const a = g.accessors[i], v = g.bufferViews[a.bufferView];
+  return new CT[a.componentType](bin.buffer, bin.byteOffset + (v.byteOffset || 0),
+                                 a.count * NC[a.type]);
+}
+
+/* ---------- shaders ---------- */
+const VS = `#version 300 es
+in vec3 a_pos; in vec3 a_nrm; in vec2 a_uv;
+uniform mat4 u_mvp, u_model;
+uniform mat4 u_shadowMvp;
+uniform highp int  u_isShadow;
+uniform float u_yShift;
+out vec3 v_wpos; out vec3 v_nrm; out vec2 v_uv;
+void main(){
+  if (u_isShadow == 1) {
+    gl_Position = u_shadowMvp * vec4(a_pos, 1.0);
+    gl_Position.y += u_yShift * gl_Position.w;
+    v_wpos = (u_model * vec4(a_pos, 1.0)).xyz;
+    v_nrm = vec3(0.0); v_uv = vec2(0.0);
+    return;
+  }
+  // Model nodes are translation-only, so the model matrix does not rotate or
+  // scale normals — pass the authored normal straight through in world space.
+  v_nrm = a_nrm;
+  v_wpos = (u_model * vec4(a_pos,1.0)).xyz;
+  v_uv = a_uv;
+  gl_Position = u_mvp * vec4(a_pos,1.0);
+  gl_Position.y += u_yShift * gl_Position.w;
+}`;
+
+const FS = `#version 300 es
+precision highp float;
+in vec3 v_wpos; in vec3 v_nrm; in vec2 v_uv;
+uniform vec4 u_base; uniform float u_metal, u_rough; uniform vec3 u_emissive;
+uniform int u_hasTex;  uniform sampler2D u_tex;
+uniform int u_hasMR;   uniform sampler2D u_mrTex;   // glTF: roughness=G, metallic=B
+uniform int u_hasNrm;  uniform sampler2D u_nrmTex;  // tangent-space normal map
+uniform vec3 u_cam; uniform int u_pick; uniform float u_pickId; uniform highp int u_isShadow; uniform float u_showAmount; uniform float u_showAngle;
+uniform vec2 u_shadowCenter; uniform float u_shadowRadius;
+uniform float u_time;
+out vec4 frag;
+const float PI = 3.14159265;
+const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+
+// Perturb the geometric normal by a tangent-space normal map using screen-space
+// derivatives to reconstruct the tangent frame — no per-vertex tangents needed.
+vec3 perturbNormal(vec3 N, vec3 V, vec2 uv) {
+  vec3 mn = texture(u_nrmTex, uv).xyz * 2.0 - 1.0;
+  vec3 dp1 = dFdx(-V), dp2 = dFdy(-V);
+  vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+  vec3 dp2p = cross(dp2, N), dp1p = cross(N, dp1);
+  vec3 T = dp2p * duv1.x + dp1p * duv2.x;
+  vec3 B = dp2p * duv1.y + dp1p * duv2.y;
+  float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+  mat3 TBN = mat3(T * invmax, B * invmax, N);
+  return normalize(TBN * mn);
+}
+
+float dGGX(float nh, float r){ float a=r*r, a2=a*a; float d=nh*nh*(a2-1.0)+1.0; return a2/(PI*d*d); }
+float gS(float nv, float r){ float k=(r+1.0)*(r+1.0)/8.0; return nv/(nv*(1.0-k)+k); }
+vec3 fS(float ct, vec3 f0){ return f0+(1.0-f0)*pow(1.0-ct,5.0); }
+
+vec3 lit(vec3 N, vec3 V, vec3 L, vec3 rad, vec3 alb, float me, float ro){
+  vec3 H=normalize(V+L);
+  float nl=max(dot(N,L),0.0), nv=max(dot(N,V),1e-4);
+  float nh=max(dot(N,H),0.0), vh=max(dot(V,H),0.0);
+  vec3 f0=mix(vec3(0.04),alb,me);
+  vec3 F=fS(vh,f0);
+  vec3 spec=(dGGX(nh,ro)*gS(nl,ro)*gS(nv,ro)*F)/max(4.0*nl*nv,1e-4);
+  return ((1.0-F)*(1.0-me)*alb/PI + spec)*rad*nl;
+}
+
+vec3 environment(vec3 N, vec3 V, vec3 alb, float me, float ro) {
+  vec3 R = reflect(-V, N);
+  float up = smoothstep(-0.35, 0.85, R.y);
+  // Cool studio surround — kept moderate so blue/painted panels retain depth
+  // rather than being flattened by a bright white environment.
+  vec3 env = mix(vec3(0.020,0.020,0.024), vec3(0.24,0.26,0.30), up);
+
+  // Broad neutral softbox reflected in vinyl, paint, and metal — from the
+  // viewer's top-right to match the key. No gold tint: the source is white.
+  float keyBox = smoothstep(0.70, 0.94, dot(R, normalize(vec3(0.48,0.72,0.52))));
+  float rimBox = smoothstep(0.80, 0.97, dot(R, normalize(vec3(-0.66,0.34,-0.55))));
+  keyBox = pow(keyBox, mix(1.2, 4.0, ro));
+  rimBox = pow(rimBox, mix(1.6, 5.5, ro));
+  env += vec3(1.0,0.97,0.92)*keyBox*0.70 + vec3(0.60,0.66,0.78)*rimBox*0.16;
+
+  vec3 f0 = mix(vec3(0.04), alb, me);
+  vec3 F = fS(max(dot(N,V),0.0), f0);
+  float specBlur = mix(1.0, 0.24, ro);
+  return env * F * specBlur + env * alb * (1.0-me) * 0.10;
+}
+
+void main(){
+  if (u_isShadow == 1) {
+    vec2 delta = v_wpos.xz - u_shadowCenter;
+    float d2 = dot(delta, delta) / (u_shadowRadius * u_shadowRadius);
+    float alpha = 0.62 * exp(-d2 * 3.5);
+    frag = vec4(0.0, 0.0, 0.0, alpha);
+    return;
+  }
+  if (u_pick == 1) { frag = vec4(u_pickId, 0.0, 0.0, 1.0); return; }
+
+  // Derive face normal from position derivatives when vertex normals are absent.
+  vec3 N = (dot(v_nrm, v_nrm) > 0.001)
+    ? normalize(v_nrm)
+    : normalize(cross(dFdx(v_wpos), dFdy(v_wpos)));
+  if(!gl_FrontFacing) N = -N;
+
+  vec3 V = normalize(u_cam - v_wpos);
+  // Tangent-space normal map (glTF): perturb the geometric normal for surface detail.
+  if (u_hasNrm == 1) N = perturbNormal(N, V, v_uv);
+
+  // Base colour (albedo). u_tex is sRGB, decoded to linear by the hardware.
+  vec3 alb = u_base.rgb;
+  if (u_hasTex == 1) alb *= texture(u_tex, v_uv).rgb;
+
+  // Metallic-roughness (glTF packs roughness in G, metallic in B; linear data).
+  float metal = u_metal, ro = u_rough;
+  if (u_hasMR == 1) {
+    vec3 mr = texture(u_mrTex, v_uv).rgb;
+    ro    *= mr.g;
+    metal *= mr.b;
+  }
+  ro = clamp(ro, 0.05, 1.0);
+
+  vec3 c = vec3(0.0);
+  // Rembrandt key: a single dominant source ~45deg to the viewer's upper-right,
+  // high enough to cast the shadow side into darkness and form the signature
+  // triangle of light. Warm, like a shaded studio lamp.
+  c += lit(N,V, normalize(vec3( 0.62, 0.82, 0.42)), vec3(2.15,2.02,1.80), alb,metal,ro);
+  // Barely-there cool fill (~6% of key) from the shadow side — keeps the darks
+  // from crushing to pure black without lifting the Rembrandt falloff.
+  c += lit(N,V, normalize(vec3(-0.78, 0.20, 0.58)), vec3(0.13,0.14,0.17), alb,metal,ro);
+  c += environment(N,V,alb,metal,ro);
+  // Mirror-ball reflections orbit the room rather than sweeping like strobes.
+  for (int i = 0; i < 4; i++) {
+    float a = u_showAngle + float(i) * 1.5707963;
+    vec3 dir = normalize(vec3(cos(a), 0.55 + 0.25*sin(a*2.0), sin(a)));
+    vec3 tint = i == 0 ? vec3(0.85,0.30,0.52)
+              : i == 1 ? vec3(0.28,0.62,0.88)
+              : i == 2 ? vec3(0.88,0.62,0.30)
+                       : vec3(0.52,0.38,0.88);
+    c += lit(N,V, dir, tint*u_showAmount, alb,metal,ro);
+  }
+
+  // Restrained studio ambient — cool from above, near-black from below — so the
+  // scene keeps directional shape instead of flat, uniform illumination.
+  float sky = 0.5 + 0.5*N.y;
+  // Cheap ambient occlusion: down/inward-facing surfaces read progressively darker.
+  float ao = mix(0.26, 1.0, smoothstep(-0.55, 0.45, N.y));
+  vec3 amb = mix(vec3(0.014,0.014,0.017), vec3(0.085,0.092,0.105), sky);
+  c += alb*amb*(1.0-metal)*ao;
+  // A hint of neutral floor bounce keeps deep undersides from going pure black.
+  c += alb*vec3(0.10,0.10,0.11)*max(-N.y,0.0)*0.10*(1.0-metal);
+
+  // Emissive (self-lit materials, e.g. the illuminated controls).
+  c += u_emissive;
+
+  // Dimmed exposure for a moody, low-key Rembrandt exposure.
+  c *= 0.72;
+  // ACES-style filmic response keeps bright metal highlights while retaining
+  // dark tonal detail.
+  c = clamp((c*(2.51*c+0.03))/(c*(2.43*c+0.59)+0.14), 0.0, 1.0);
+  c = pow(c, vec3(1.0/2.2));
+
+  // Animated screen-space film grain, scaled by roughness so matte panels pick
+  // up more texture than polished hardware.
+  float gn = fract(sin(dot(gl_FragCoord.xy + u_time * 141.7, vec2(127.1, 311.7))) * 43758.5);
+  c += (gn - 0.5) * 0.03 * mix(0.22, 1.0, ro) * (1.0 - metal * 0.65);
+  frag = vec4(c, 1.0);
+}`;
+
+/* ---------- gl setup ---------- */
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl2', { antialias: true, alpha: true });
+const errBox = document.getElementById('err');
+function fail(m) {
+  errBox.style.display = 'flex'; errBox.textContent = m;
+  document.getElementById('loader').classList.add('done');
+}
+if (!gl) fail("WebGL2 is not available in this browser.");
+
+function compile(src, t) {
+  const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(vs, gl.VERTEX_SHADER));
+  gl.attachShader(p, compile(fs, gl.FRAGMENT_SHADER));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+/* ---------- camera ---------- */
+const FOV = 30 * Math.PI / 180;
+// On-screen height of the asset, tiered by device class.
+function targetPx() {
+  const w = innerWidth;
+  if (w >= 1440) return 200;   // desktop
+  if (w >= 1024) return 170;   // laptop
+  if (w >= 640)  return 130;   // tablet
+  return 95;                   // mobile
+}
+let TARGET_PX = targetPx();
+addEventListener('resize', () => { TARGET_PX = targetPx(); yShiftDirty = true; });
+
+let yaw = 0;          // start perfectly face-on (front of the deck toward the camera)
+const pitch = 0.42;   // fixed viewing tilt; only yaw is user-controllable
+let modelH = 1, radius = 20;
+let drag = false, lx = 0, ly = 0;
+const baseDist = () => modelH * innerHeight / (2 * TARGET_PX * Math.tan(FOV / 2));
+
+const MIN_HEADLINE_GAP = 40;   // px, always kept clear between headline and model
+const COMPOSITION_OFFSET_Y = -200;
+const MODEL_DROP_PX = 144;     // extra downward nudge of the whole model
+const headlineEl = document.getElementById('headline');
+let yShift = 0;
+// The model only orbits about a vertical axis, so its vertical placement is
+// yaw-invariant: compute yShift once and recompute only when the viewport
+// changes, otherwise the model would bob up and down as it rotates.
+let yShiftDirty = true;
+let modelBounds = null;
+
+function computeYShift(VP, dpr, canvasH) {
+  if (!modelBounds) return 0;
+  const rect = headlineEl.getBoundingClientRect();
+  let topPx = Infinity;
+  const [lo, hi] = modelBounds;
+  for (const x of [lo[0], hi[0]]) {
+    for (const y of [lo[1], hi[1]]) {
+      for (const z of [lo[2], hi[2]]) {
+        const clip = M4.xform(VP, [x, y, z, 1]);
+        if (clip[3] > 0) {
+          const px = (1 - clip[1] / clip[3]) / 2 * (canvasH / dpr) + COMPOSITION_OFFSET_Y;
+          topPx = Math.min(topPx, px);
+        }
+      }
+    }
+  }
+  if (!Number.isFinite(topPx)) return 0;
+  const neededDown = (rect.bottom + MIN_HEADLINE_GAP) - topPx;
+  const drop = MODEL_DROP_PX * 2 / (canvasH / dpr);   // clip-space equivalent of the 40px nudge
+  const baseShift = -(COMPOSITION_OFFSET_Y * 2 / (canvasH / dpr)) - drop;
+  if (neededDown <= 0) return baseShift;
+  return baseShift - (neededDown * 2 / (canvasH / dpr));
+}
+
+let prog, U, draws = [], lastVP = null, lastEye = [0,0,1];
+
+async function init() {
+  const { json: g, bin } = parseGLB(await (await fetch(MODEL_URL)).arrayBuffer());
+  prog = program(VS, FS);
+  U = ['u_mvp','u_model','u_base','u_metal','u_rough','u_emissive',
+       'u_hasTex','u_tex','u_hasMR','u_mrTex','u_hasNrm','u_nrmTex','u_cam','u_pick','u_pickId','u_yShift',
+       'u_showAmount','u_showAngle',
+       'u_isShadow','u_shadowMvp','u_time','u_shadowCenter','u_shadowRadius']
+      .reduce((o, n) => (o[n] = gl.getUniformLocation(prog, n), o), {});
+
+  // Color maps upload as sRGB so the GPU decodes to linear before filtering/mipmapping;
+  // data maps (bump, roughness) stay raw linear RGBA and must NOT be sRGB-decoded.
+  const makeTex = (bmp, srgb, clamp) => {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, srgb ? gl.SRGB8_ALPHA8 : gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    const wrap = clamp ? gl.CLAMP_TO_EDGE : gl.REPEAT;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+    const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+    if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT,
+                              Math.min(16, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+    return t;
+  };
+  // Skip the browser's default ICC/display color management so authored sRGB values arrive intact.
+  const decode = blob => createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  // Images referenced as baseColor are color data; everything else (bump/roughness) is linear.
+  const colorImgs = new Set();
+  for (const mt of (g.materials || [])) {
+    const bc = mt.pbrMetallicRoughness && mt.pbrMetallicRoughness.baseColorTexture;
+    if (bc) colorImgs.add(g.textures[bc.index].source);
+  }
+  const texes = await Promise.all((g.images || []).map(async (img, index) => {
+    const v = g.bufferViews[img.bufferView];
+    const blob = new Blob([new Uint8Array(bin.buffer, bin.byteOffset + (v.byteOffset || 0),
+                                          v.byteLength)], { type: img.mimeType });
+    return makeTex(await decode(blob), colorImgs.has(index));
+  }));
+  const texOf = i => (i === undefined ? null : texes[g.textures[i].source]);
+
+  let lo = [1e30,1e30,1e30], hi = [-1e30,-1e30,-1e30];
+  // Mesh 36 is the "Printed silver legends" decal, authored floating above the
+  // deck surfaces — skip it so no white index lines hover over the player.
+  const HIDDEN_MESHES = new Set([36]);
+  for (const node of g.nodes) {
+    if (node.mesh === undefined || HIDDEN_MESHES.has(node.mesh)) continue;
+    const t = node.translation || [0,0,0];
+    const model = M4.trans(t);
+    for (const p of g.meshes[node.mesh].primitives) {
+      const m = g.materials[p.material] || {};
+      const pbr = m.pbrMetallicRoughness || {};
+
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      const buffer = (data, loc, size) => {
+        const b = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, b);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+      };
+      const bind = (acc, loc, size) => buffer(readAcc(g, bin, acc), loc, size);
+      buffer(readAcc(g, bin, p.attributes.POSITION), 0, 3);
+      if (p.attributes.NORMAL !== undefined) bind(p.attributes.NORMAL, 1, 3);
+      if (p.attributes.TEXCOORD_0 !== undefined) bind(p.attributes.TEXCOORD_0, 2, 2);
+      const idx = readAcc(g, bin, p.indices);
+      const ib = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+      gl.bindVertexArray(null);
+
+      const pa = g.accessors[p.attributes.POSITION];
+      for (let i = 0; i < 3; i++) {
+        lo[i] = Math.min(lo[i], pa.min[i] + t[i]);
+        hi[i] = Math.max(hi[i], pa.max[i] + t[i]);
+      }
+
+      // Read the model's own glTF PBR material — base colour, metallic-roughness,
+      // normal map and emissive — with no bespoke per-material overrides.
+      const bcf = pbr.baseColorFactor || [1,1,1,1];
+      const bcTex = pbr.baseColorTexture ? texOf(pbr.baseColorTexture.index) : null;
+      const mrTex = pbr.metallicRoughnessTexture ? texOf(pbr.metallicRoughnessTexture.index) : null;
+      const nrmTex = m.normalTexture ? texOf(m.normalTexture.index) : null;
+      const em = m.emissiveFactor || [0,0,0];
+      draws.push({
+        vao, model, t, mesh: node.mesh,
+        count: idx.length,
+        type: idx.BYTES_PER_ELEMENT === 4 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT,
+        base: [bcf[0], bcf[1], bcf[2], bcf[3] === undefined ? 1 : bcf[3]],
+        metal: pbr.metallicFactor === undefined ? 1.0 : pbr.metallicFactor,
+        rough: pbr.roughnessFactor === undefined ? 1.0 : pbr.roughnessFactor,
+        emissive: [em[0], em[1], em[2]],
+        tex: bcTex, mrTex, nrmTex
+      });
+    }
+  }
+  modelH = hi[1] - lo[1];
+  modelBounds = [lo, hi];
+  radius = 0.5 * Math.hypot(hi[0]-lo[0], hi[1]-lo[1], hi[2]-lo[2]);
+
+  // Build a single ground-plane quad for the shadow — large enough that the
+  // Gaussian fades to zero well within its edges, so frustum clipping never
+  // produces a visible hard cutoff.
+  {
+    const scx = (lo[0] + hi[0]) * 0.5, scz = (lo[2] + hi[2]) * 0.5;
+    const srx = (hi[0] - lo[0]) * 0.5, srz = (hi[2] - lo[2]) * 0.5;
+    const pad = Math.max(srx, srz) * 3.0;
+    const gy  = lo[1] - 0.002;
+    const pos = new Float32Array([
+      scx-pad, gy, scz-pad,  scx+pad, gy, scz-pad,
+      scx+pad, gy, scz+pad,  scx-pad, gy, scz+pad,
+    ]);
+    const idx = new Uint16Array([0,1,2, 0,2,3]);
+    const shadowVao = gl.createVertexArray();
+    gl.bindVertexArray(shadowVao);
+    const pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb);
+    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    const ib2 = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib2);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    window._shadowQuad = { vao: shadowVao, model: M4.ident(), t: [0,0,0] };
+  }
+
+  gl.enable(gl.DEPTH_TEST);
+  gl.disable(gl.CULL_FACE);
+  document.getElementById('loader').classList.add('done');
+  setTimeout(() => {
+    if (!playing) {
+      positionBoogiePrompt();
+      boogiePrompt.classList.add('show');
+    }
+  }, 1000);
+  requestAnimationFrame(frame);
+}
+
+/* ---------- playback ---------- */
+const RPM = 33 + 1 / 3;
+const ARM_SECS = 1.6;
+const SONG_BPM = 122;
+
+/* ---------- moving parts (mesh ids identified from the glTF geometry) ---------- */
+// The platter/record spin about the spindle; the tonearm swings about its
+// bearing; the volume knob twists about its own axis.
+const SPIN_AXIS = [-0.0454, -0.0002];        // spindle, shared by platter + vinyl
+const SPIN_MESHES = new Set([4, 6, 15, 40, 41]);
+const ARM_PIVOT = [0.150, -0.088];           // tonearm bearing
+// Arm tube + bearing + counterweight, plus the headshell/cartridge cluster at
+// the front tip (0-3 = headshell wires, 17/18 = finger lift, 21 = headshell
+// collar, 34 = headshell body) so the whole head swings rigidly with the arm.
+// Mesh 24 is the fixed arm-rest clip the head parks on, so it stays put.
+const ARM_MESHES = new Set([0, 1, 2, 3, 8, 9, 12, 13, 14, 17, 18, 21, 23, 24, 27, 33, 34, 35]);
+const ARM_SWING = -22 * Math.PI / 180;       // sweep that lands the needle on the record
+const KNOB_MESH = 19;                        // rotary knob used as the volume control
+const KNOB_CENTER = [0.157, -0.144];
+const VOL_SWEEP = 270 * Math.PI / 180;       // knob travel across the full volume range
+
+let playing = false, armT = 0, spin = 0, lastT = 0;
+// Interaction state — declared exactly once, up front, so init(), frame() and
+// the pointer handlers can all reference it without ordering hazards.
+let volume = 0.8;
+let volumeKnobAngle = (volume - 0.5) * VOL_SWEEP;
+let knobDragging = false, knobDragStartY = 0, knobStartVol = volume;
+
+// Per-mesh model matrix: applies live spin / arm-swing / knob-twist, else the
+// node's authored (translation-only) transform. Used by both the render and
+// pick passes so hit-testing tracks the animated geometry.
+function modelFor(d) {
+  if (SPIN_MESHES.has(d.mesh)) return M4.rotYAbout(SPIN_AXIS[0], SPIN_AXIS[1], spin);
+  if (ARM_MESHES.has(d.mesh)) return M4.rotYAbout(ARM_PIVOT[0], ARM_PIVOT[1], ARM_SWING * armT);
+  if (d.mesh === KNOB_MESH) return M4.rotYAbout(KNOB_CENTER[0], KNOB_CENTER[1], volumeKnobAngle);
+  return d.model;
+}
+let widget = null;
+let trackMs = 0, trackDurationMs = 0, trackClock = 0;
+let effectsEnabled = false;
+let scrubbing = false;
+const timeline = document.getElementById('timeline');
+const scrubber = document.getElementById('scrubber');
+const elapsedEl = document.getElementById('elapsed');
+const durationEl = document.getElementById('duration');
+
+function formatTime(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+function updateTimeline(ms) {
+  if (!scrubbing && trackDurationMs > 0) scrubber.value = String(Math.round(ms / trackDurationMs * 1000));
+  const shownMs = scrubbing ? Number(scrubber.value) / 1000 * trackDurationMs : ms;
+  elapsedEl.textContent = formatTime(shownMs);
+  elapsedEl.dateTime = `PT${Math.floor(shownMs / 1000)}S`;
+  scrubber.style.setProperty('--progress', `${scrubber.value / 10}%`);
+}
+
+function setPlaying(on) {
+  playing = on;
+  // Drives the dark-mode disco: lights only animate while the music plays.
+  document.body.classList.toggle('playing', on);
+  playBtn.classList.toggle('playing', on);
+  playBtn.setAttribute('aria-label', on ? 'Pause music' : 'Play music');
+  // The airhorn is only offered while the record is spinning.
+  hornBtn.classList.toggle('show', on);
+  hornBtn.setAttribute('aria-disabled', on ? 'false' : 'true');
+  if (on) {
+    trackClock = performance.now() - trackMs;
+    effectsEnabled = true;
+    lightBtn.setAttribute('aria-disabled', 'false');
+    boogiePrompt.classList.remove('show');
+    timeline.classList.add('show');
+  }
+}
+function togglePlay() {
+  if (widget) widget.toggle();
+  else setPlaying(!playing);
+}
+if (window.SC && SC.Widget) {
+  try {
+    widget = SC.Widget(document.getElementById('sc'));
+    widget.bind(SC.Widget.Events.READY, () => {
+      widget.setVolume(volume * 100);
+      widget.getDuration(ms => {
+        trackDurationMs = ms || 0;
+        durationEl.textContent = formatTime(trackDurationMs);
+        durationEl.dateTime = `PT${Math.floor(trackDurationMs / 1000)}S`;
+      });
+    });
+    widget.bind(SC.Widget.Events.PLAY,   () => setPlaying(true));
+    widget.bind(SC.Widget.Events.PAUSE,  () => setPlaying(false));
+    widget.bind(SC.Widget.Events.FINISH, () => setPlaying(false));
+    widget.bind(SC.Widget.Events.PLAY_PROGRESS, e => {
+      trackMs = e.currentPosition || 0;
+      if (playing) trackClock = performance.now() - trackMs;
+      updateTimeline(trackMs);
+    });
+  } catch (e) { widget = null; }
+}
+
+/* ---------- stage effects ---------- */
+const lightBtn = document.getElementById('lightBtn');
+const hornBtn = document.getElementById('hornBtn');
+const playBtn = document.getElementById('playBtn');
+playBtn.addEventListener('click', togglePlay);
+const toast = document.getElementById('toast');
+const boogiePrompt = document.getElementById('boogiePrompt');
+let toastTimer = 0;
+function showToast(message, duration = 1800) {
+  clearTimeout(toastTimer);
+  toast.textContent = message;
+  toast.classList.remove('show');
+  requestAnimationFrame(() => toast.classList.add('show'));
+  toastTimer = setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => { toast.textContent = 'Play the music to enable'; }, 220);
+  }, duration);
+}
+function requireMusic() {
+  if (effectsEnabled) return true;
+  showToast('Play the music to enable');
+  return false;
+}
+let darkMode = false;
+lightBtn.addEventListener('click', () => {
+  if (!requireMusic()) return;
+  darkMode = !darkMode;
+  document.body.classList.toggle('dark', darkMode);
+  lightBtn.setAttribute('aria-pressed', String(darkMode));
+  lightBtn.setAttribute('aria-label', darkMode ? 'Turn off dark mode' : 'Turn on dark mode');
+});
+
+const airhorn = document.getElementById('airhorn');
+const AIRHORN_CDN = 'https://cdn.pixabay.com/download/audio/2022/03/10/audio_5cb595572d.mp3?filename=freesound_community-dj-airhorn-sound-39405.mp3';
+const HORN_SNARK = ['OK, sure.', 'So tastetful...', 'Please stop.', "I'm leaving.", 'Security!'];
+let hornFallbackUsed = false;
+let snarkIndex = 0;
+let snarkTimer = 0;
+function showSnark(message) {
+  clearTimeout(snarkTimer);
+  boogiePrompt.textContent = message;
+  positionBoogiePrompt();
+  boogiePrompt.classList.add('show');
+  snarkTimer = setTimeout(() => {
+    boogiePrompt.classList.remove('show');
+    setTimeout(() => { boogiePrompt.textContent = 'Tap or click the record to boogie.'; }, 450);
+  }, 1800);
+}
+async function playAirhorn() {
+  if (!requireMusic()) return;
+  showSnark(HORN_SNARK[snarkIndex]);
+  snarkIndex = (snarkIndex + 1) % HORN_SNARK.length;
+  airhorn.pause();
+  airhorn.currentTime = 0;
+  try {
+    await airhorn.play();
+  } catch (error) {
+    if (!hornFallbackUsed) {
+      hornFallbackUsed = true;
+      airhorn.src = AIRHORN_CDN;
+      airhorn.load();
+      try { await airhorn.play(); } catch (fallbackError) {
+        showToast('Airhorn could not play');
+      }
+    }
+  }
+  hornBtn.classList.remove('blast');
+  requestAnimationFrame(() => hornBtn.classList.add('blast'));
+  setTimeout(() => hornBtn.classList.remove('blast'), 450);
+}
+hornBtn.addEventListener('click', playAirhorn);
+
+let scratchCtx = null, scratchBuffer = null, lastScratch = 0, lastScrubValue = 0;
+function scratch(amount) {
+  const nowMs = performance.now();
+  if (nowMs - lastScratch < 55 || amount < 0.001) return;
+  lastScratch = nowMs;
+  scratchCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+  scratchCtx.resume();
+  if (!scratchBuffer) {
+    scratchBuffer = scratchCtx.createBuffer(1, Math.floor(scratchCtx.sampleRate * 0.12), scratchCtx.sampleRate);
+    const data = scratchBuffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random()*2-1) * (1-i/data.length);
+  }
+  const source = scratchCtx.createBufferSource(), filter = scratchCtx.createBiquadFilter(), gain = scratchCtx.createGain();
+  source.buffer = scratchBuffer;
+  source.playbackRate.value = 0.72 + Math.min(amount * 8, 0.75);
+  filter.type = 'bandpass'; filter.frequency.value = 1450; filter.Q.value = 0.75;
+  gain.gain.value = Math.min(0.035 + amount * 0.09, 0.11);
+  source.connect(filter).connect(gain).connect(scratchCtx.destination);
+  source.start();
+}
+function seekFromScrubber() {
+  if (!widget || !trackDurationMs) return;
+  trackMs = Number(scrubber.value) / 1000 * trackDurationMs;
+  trackClock = performance.now() - trackMs;
+  widget.seekTo(trackMs);
+  updateTimeline(trackMs);
+}
+scrubber.addEventListener('pointerdown', () => {
+  scrubbing = true;
+  lastScrubValue = Number(scrubber.value);
+});
+scrubber.addEventListener('input', () => {
+  const value = Number(scrubber.value);
+  const delta = Math.abs(value - lastScrubValue) / 1000;
+  scratch(delta);
+  spin += (value - lastScrubValue) / 1000 * Math.PI * 2.4;
+  lastScrubValue = value;
+  const previewMs = value / 1000 * trackDurationMs;
+  elapsedEl.textContent = formatTime(previewMs);
+  elapsedEl.dateTime = `PT${Math.floor(previewMs / 1000)}S`;
+  scrubber.style.setProperty('--progress', `${value / 10}%`);
+});
+scrubber.addEventListener('change', seekFromScrubber);
+scrubber.addEventListener('pointerup', () => { seekFromScrubber(); scrubbing = false; });
+scrubber.addEventListener('pointercancel', () => { scrubbing = false; updateTimeline(trackMs); });
+
+/* ---------- picking: is the pointer over the model? ---------- */
+let fbo = null, fboTex = null, fboRb = null, fboW = 0, fboH = 0;
+function ensureFBO(w, h) {
+  if (fbo && fboW === w && fboH === h) return;
+  if (fbo) { gl.deleteFramebuffer(fbo); gl.deleteTexture(fboTex); gl.deleteRenderbuffer(fboRb); }
+  fboW = w; fboH = h;
+  fboTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, fboTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  fboRb = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, fboRb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+  fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fboTex, 0);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, fboRb);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+// Returns the mesh id under the pointer, or -1 for empty space. Each mesh is
+// drawn in a flat colour encoding its id (id+1 in the red channel).
+function pickMesh(clientX, clientY) {
+  if (!lastVP || !draws.length) return -1;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = canvas.width, h = canvas.height;
+  ensureFBO(w, h);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.viewport(0, 0, w, h);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.useProgram(prog);
+  gl.uniform1i(U.u_pick, 1);
+  gl.uniform1f(U.u_yShift, yShift);
+  for (const d of draws) {
+    gl.uniform1f(U.u_pickId, (d.mesh + 1) / 255);
+    gl.uniformMatrix4fv(U.u_mvp, false, M4.mul(lastVP, modelFor(d)));
+    gl.bindVertexArray(d.vao);
+    gl.drawElements(gl.TRIANGLES, d.count, d.type, 0);
+  }
+  gl.uniform1i(U.u_pick, 0);
+  const px = new Uint8Array(4);
+  const rx = Math.round(clientX * dpr), ry = Math.round(h - clientY * dpr);
+  gl.readPixels(Math.max(0, Math.min(w-1, rx)), Math.max(0, Math.min(h-1, ry)),
+                1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return px[3] > 0 ? px[0] - 1 : -1;
+}
+function hitsModel(clientX, clientY) { return pickMesh(clientX, clientY) >= 0; }
+
+/* ---------- interaction ---------- */
+// The prompt is placed by stationary, viewport-scaled CSS (see #boogiePrompt),
+// so it no longer tracks the animated model. Kept as a no-op for call sites.
+function positionBoogiePrompt() {}
+
+let downY = 0, downT = 0, moved = 0;
+
+// Drag the volume knob vertically: up louder, down quieter, with the knob
+// twisting to match and a toast reading out the level.
+function applyKnobDrag(clientY) {
+  const nv = Math.max(0, Math.min(1, knobStartVol + (knobDragStartY - clientY) * 0.006));
+  if (nv === volume) return;
+  volume = nv;
+  volumeKnobAngle = (volume - 0.5) * VOL_SWEEP;
+  if (widget) widget.setVolume(volume * 100);
+  showToast(`Volume ${Math.round(volume * 100)}%`);
+}
+
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  if (pickMesh(e.clientX, e.clientY) === KNOB_MESH) {
+    knobDragging = true; knobDragStartY = e.clientY; knobStartVol = volume;
+    canvas.classList.add('dragging');
+    return;
+  }
+  drag = true; lx = e.clientX; ly = downY = e.clientY;
+  downT = performance.now(); moved = 0;
+  canvas.classList.add('dragging');
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (knobDragging) { applyKnobDrag(e.clientY); return; }
+  if (!drag) return;
+  moved += Math.abs(e.clientX - lx) + Math.abs(e.clientY - ly);
+  // Horizontal drag orbits the player; vertical tilt stays locked.
+  yaw -= (e.clientX - lx) * 0.0075;
+  lx = e.clientX; ly = e.clientY;
+});
+
+function endDrag(e) {
+  if (knobDragging) {
+    knobDragging = false;
+    canvas.classList.remove('dragging');
+    return;
+  }
+  if (!drag) return;
+  drag = false;
+  canvas.classList.remove('dragging');
+  const isTap = moved < 6 && (performance.now() - downT) < 400;
+  if (isTap && hitsModel(e.clientX, e.clientY)) togglePlay();
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', e => {
+  drag = false; knobDragging = false; canvas.classList.remove('dragging');
+});
+
+// pointer feedback when hovering the player
+let hoverPending = false;
+canvas.addEventListener('pointermove', e => {
+  if (drag || hoverPending || e.pointerType !== 'mouse') return;
+  hoverPending = true;
+  requestAnimationFrame(() => {
+    hoverPending = false;
+    const hit = pickMesh(e.clientX, e.clientY);
+    canvas.classList.toggle('overKnob', hit === KNOB_MESH);
+    canvas.classList.toggle('overModel', hit >= 0 && hit !== KNOB_MESH);
+  });
+});
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.floor(innerWidth * dpr), h = Math.floor(innerHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+function frame(now) {
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.05) : 0;
+  lastT = now;
+  armT += (playing ? 1 : -1) * dt / ARM_SECS;
+  armT = Math.max(0, Math.min(1, armT));
+  if (playing) spin += dt * RPM / 60 * 2 * Math.PI;
+
+  resize();
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const dist = baseDist();
+  const cp = Math.cos(pitch);
+  const eye = [dist*cp*Math.sin(yaw), dist*Math.sin(pitch), dist*cp*Math.cos(yaw)];
+  const P = M4.persp(FOV, canvas.width / canvas.height, dist * 0.02, dist + radius * 4);
+  const VP = M4.mul(P, M4.look(eye, [0,0,0], [0,1,0]));
+  lastVP = VP; lastEye = eye;
+
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  // Recompute the vertical placement only on load/resize — never per-yaw — so the
+  // model spins about a fixed point instead of bobbing along the Y axis.
+  if (yShiftDirty && modelBounds) { yShift = computeYShift(VP, dpr, canvas.height); yShiftDirty = false; }
+  if (boogiePrompt.classList.contains('show')) positionBoogiePrompt();
+
+  // Shadow pass — draw a single ground-plane quad with a Gaussian falloff.
+  // A pre-built oversized quad avoids the frustum-clipping hard edges that
+  // projecting individual model triangles to the floor plane would produce.
+  if (modelBounds && window._shadowQuad) {
+    const scx = (modelBounds[0][0] + modelBounds[1][0]) * 0.5;
+    const scz = (modelBounds[0][2] + modelBounds[1][2]) * 0.5;
+    const srx = (modelBounds[1][0] - modelBounds[0][0]) * 0.5;
+    const srz = (modelBounds[1][2] - modelBounds[0][2]) * 0.5;
+    const srad = Math.max(srx, srz);
+    const q = window._shadowQuad;
+    gl.useProgram(prog);
+    gl.uniform1f(U.u_yShift, yShift);
+    gl.uniform1i(U.u_isShadow, 1);
+    gl.uniform2f(U.u_shadowCenter, scx, scz);
+    gl.uniform1f(U.u_shadowRadius, srad);
+    gl.enable(gl.BLEND);
+    gl.blendEquation(gl.MAX);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.depthMask(false);
+    gl.uniformMatrix4fv(U.u_shadowMvp, false, VP);
+    gl.uniformMatrix4fv(U.u_model, false, q.model);
+    gl.bindVertexArray(q.vao);
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.uniform1i(U.u_isShadow, 0);
+  }
+
+  gl.useProgram(prog);
+  gl.uniform3fv(U.u_cam, eye);
+  gl.uniform1i(U.u_pick, 0);
+  gl.uniform1f(U.u_yShift, yShift);
+  gl.uniform1f(U.u_time, now / 1000);
+  gl.uniform1i(U.u_tex, 0);
+  gl.uniform1i(U.u_mrTex, 1);
+  gl.uniform1i(U.u_nrmTex, 2);
+
+  // Disco-ball lighting effects removed: dark mode darkens the room but casts no light spots.
+  gl.uniform1f(U.u_showAmount, 0);
+  gl.uniform1f(U.u_showAngle, 0);
+
+  for (const d of draws) {
+    const model = modelFor(d);
+    gl.uniformMatrix4fv(U.u_mvp, false, M4.mul(VP, model));
+    gl.uniformMatrix4fv(U.u_model, false, model);
+    gl.uniform4fv(U.u_base, d.base);
+    gl.uniform1f(U.u_metal, d.metal);
+    gl.uniform1f(U.u_rough, d.rough);
+    gl.uniform3fv(U.u_emissive, d.emissive);
+    gl.uniform1i(U.u_hasTex, d.tex ? 1 : 0);
+    if (d.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, d.tex); }
+    gl.uniform1i(U.u_hasMR, d.mrTex ? 1 : 0);
+    if (d.mrTex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, d.mrTex); }
+    gl.uniform1i(U.u_hasNrm, d.nrmTex ? 1 : 0);
+    if (d.nrmTex) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, d.nrmTex); }
+    gl.bindVertexArray(d.vao);
+    gl.drawElements(gl.TRIANGLES, d.count, d.type, 0);
+  }
+  requestAnimationFrame(frame);
+}
+
+if (gl) init().catch(e => fail("Could not load the model: " + e.message));
+</script>
+</body>
+</html>
